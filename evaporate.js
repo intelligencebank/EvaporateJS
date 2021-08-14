@@ -81,6 +81,7 @@
       signParams: {},
       signHeaders: {},
       customAuthMethod: undefined,
+      backendSignMethod: undefined,
       maxFileSize: null,
       signResponseHandler: null,
       xhrWithCredentials: false,
@@ -419,7 +420,9 @@
       }
     }
 
-    if (!this.config.signerUrl && typeof this.config.customAuthMethod !== 'function') {
+    if (!this.config.signerUrl 
+      && typeof this.config.customAuthMethod !== 'function' 
+      && this.config.awsSignatureVersion !== 'backend') {
       return "Option signerUrl is required unless customAuthMethod is present.";
     }
 
@@ -445,6 +448,11 @@
     } else if (this.config.awsSignatureVersion === '4') {
       return 'Option awsSignatureVersion is 4 but computeContentMd5 is not enabled.';
     }
+
+    if (this.config.awsSignatureVersion === 'backend' && !this.config.backendSignMethod) {
+      return 'Option awsSignatureVersion is backend but backendSignMethod is not defined.';
+    }
+
     return true;
   };
   Evaporate.prototype.evaporatingCnt = function (incr) {
@@ -1111,76 +1119,86 @@
   };
   SignedS3AWSRequest.prototype.sendRequestToAWS = function () {
     var self = this;
-    return new Promise( function (resolve, reject) {
-      var xhr = new XMLHttpRequest();
-      self.currentXhr = xhr;
 
-      var url = [self.awsUrl, self.getPath(), self.request.path].join(""),
-          all_headers = {};
+    var authorizationStringPromise;
+    if (self.awsSignatureVersion === 'backend') {
+      authorizationStringPromise = self.signer.authorizationString();
+    } else {
+      authorizationStringPromise = Promise.resolve(self.signer.authorizationString());
+    }
 
-      if (self.request.query_string) {
-        url += self.request.query_string;
-      }
-      extend(all_headers, self.request.not_signed_headers);
-      extend(all_headers, self.request.x_amz_headers);
-
-      xhr.onreadystatechange = function () {
-        if (xhr.readyState === 4) {
-
-          if (self.success_status(xhr)) {
-            if (self.request.response_match &&
-                xhr.response.match(new RegExp(self.request.response_match)) === undefined) {
-              reject('AWS response does not match set pattern: ' + self.request.response_match);
+    return authorizationStringPromise.then(function (authorizationString) {
+      return new Promise( function (resolve, reject) {
+        var xhr = new XMLHttpRequest();
+        self.currentXhr = xhr;
+  
+        var url = [self.awsUrl, self.getPath(), self.request.path].join(""),
+            all_headers = {};
+  
+        if (self.request.query_string) {
+          url += self.request.query_string;
+        }
+        extend(all_headers, self.request.not_signed_headers);
+        extend(all_headers, self.request.x_amz_headers);
+  
+        xhr.onreadystatechange = function () {
+          if (xhr.readyState === 4) {
+  
+            if (self.success_status(xhr)) {
+              if (self.request.response_match &&
+                  xhr.response.match(new RegExp(self.request.response_match)) === undefined) {
+                reject('AWS response does not match set pattern: ' + self.request.response_match);
+              } else {
+                resolve();
+              }
             } else {
-              resolve();
+              var reason = xhr.responseText ? getAwsResponse(xhr) : ' ';
+              reason += 'status:' + xhr.status;
+              reject(reason);
             }
-          } else {
-            var reason = xhr.responseText ? getAwsResponse(xhr) : ' ';
-            reason += 'status:' + xhr.status;
-            reject(reason);
+          }
+        };
+  
+        xhr.open(self.request.method, url);
+        xhr.setRequestHeader('Authorization', authorizationString);
+  
+        for (var key in all_headers) {
+          if (all_headers.hasOwnProperty(key)) {
+            xhr.setRequestHeader(key, all_headers[key]);
           }
         }
-      };
-
-      xhr.open(self.request.method, url);
-      xhr.setRequestHeader('Authorization', self.signer.authorizationString());
-
-      for (var key in all_headers) {
-        if (all_headers.hasOwnProperty(key)) {
-          xhr.setRequestHeader(key, all_headers[key]);
+  
+        self.signer.setHeaders(xhr);
+  
+        if (self.request.contentType) {
+          xhr.setRequestHeader('Content-Type', self.request.contentType);
         }
-      }
-
-      self.signer.setHeaders(xhr);
-
-      if (self.request.contentType) {
-        xhr.setRequestHeader('Content-Type', self.request.contentType);
-      }
-
-      if (self.request.md5_digest) {
-        xhr.setRequestHeader('Content-MD5', self.request.md5_digest);
-      }
-
-      if (self.request.contentDisposition) {
-        xhr.setRequestHeader('Content-Disposition', self.request.contentDisposition);
-      }
-      xhr.onerror = function (xhr) {
-        var reason = xhr.responseText ? getAwsResponse(xhr) : 'transport error';
-        reject(reason);
-      };
-
-      if (typeof self.request.onProgress === 'function') {
-        xhr.upload.onprogress = self.request.onProgress;
-      }
-
-      self.getPayload()
-          .then(xhr.send.bind(xhr), reject);
-
-      setTimeout(function () { // We have to delay here or Safari will hang
-        self.started.resolve('request sent ' + self.request.step);
-      }, 20);
-      self.signer.payload = null;
-      self.payloadPromise = undefined;
+  
+        if (self.request.md5_digest) {
+          xhr.setRequestHeader('Content-MD5', self.request.md5_digest);
+        }
+  
+        if (self.request.contentDisposition) {
+          xhr.setRequestHeader('Content-Disposition', self.request.contentDisposition);
+        }
+        xhr.onerror = function (xhr) {
+          var reason = xhr.responseText ? getAwsResponse(xhr) : 'transport error';
+          reject(reason);
+        };
+  
+        if (typeof self.request.onProgress === 'function') {
+          xhr.upload.onprogress = self.request.onProgress;
+        }
+  
+        self.getPayload()
+            .then(xhr.send.bind(xhr), reject);
+  
+        setTimeout(function () { // We have to delay here or Safari will hang
+          self.started.resolve('request sent ' + self.request.step);
+        }, 20);
+        self.signer.payload = null;
+        self.payloadPromise = undefined;
+      });
     });
   };
   //see: http://docs.amazonwebservices.com/AmazonS3/latest/dev/RESTAuthentication.html#ConstructingTheAuthenticationHeader
@@ -1849,7 +1867,35 @@
       xhr.setRequestHeader("x-amz-content-sha256", this.getPayloadSha256Content());
     };
 
-    return con.awsSignatureVersion === '4' ? AwsSignatureV4 : AwsSignatureV2;
+    function BackendSignature(request) {
+      AwsSignatureV4.call(this, request);
+    }
+    BackendSignature.prototype = Object.create(AwsSignatureV4.prototype);
+
+    // Async
+    BackendSignature.prototype.authorizationString = function () {
+      var fileUpload = awsRequest.fileUpload
+
+      var headers = this.canonicalHeaders();
+      // backendSignMethod returns Promise of string
+      return con.backendSignMethod({
+        headersToSign: headers.signedHeaders, 
+        requestDate: this.request.dateString,
+        canonicalRequest: this.canonicalRequest()
+      }).catch(function (reason) {
+        fileUpload.deferredCompletion.reject(reason);
+        throw reason;
+      });
+    }
+
+    switch (con.awsSignatureVersion) {
+      case '4':
+        return AwsSignatureV4;
+      case 'backend':
+        return BackendSignature;
+      default:
+        return AwsSignatureV2;
+    }
   }
   function authorizationMethod(awsRequest) {
     var fileUpload = awsRequest.fileUpload,
@@ -1857,6 +1903,7 @@
         request = awsRequest.request;
 
     function AuthorizationMethod() {
+      console.log('AuthorizationMethod.this', this);
       this.request = request;
     }
     AuthorizationMethod.prototype = Object.create(AuthorizationMethod.prototype);
@@ -1946,6 +1993,18 @@
             throw reason;
           });
     };
+
+    function AuthorizationDeferred() {
+      AuthorizationMethod.call(this);
+    }
+    AuthorizationDeferred.prototype = Object.create(AuthorizationMethod.prototype);
+    AuthorizationDeferred.prototype.authorize = function () {
+      return Promise.resolve(null);
+    }
+
+    if (con.awsSignatureVersion === 'backend') {
+      return new AuthorizationDeferred();
+    }
 
     if (typeof con.customAuthMethod === 'function') {
       return new AuthorizationCustom()

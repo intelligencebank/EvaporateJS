@@ -18,8 +18,25 @@
     <li>bucket -- set this to your actual bucket name</li>
   </ul>
 
-
   <script language="javascript">
+  
+  const backendSign = async (body) => {
+    const resp = await fetch(
+      'http://localhost:8080/backend_sign',
+      {
+        method: 'POST',
+        body: JSON.stringify(body),
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+    if (resp.status === 200) {
+      return await resp.text();
+    } else {
+      throw 'Invalid signature response';
+    }
+  }
 
   Evaporate.create({
     /* START EDITS */
@@ -27,11 +44,13 @@
     bucket: '<bucket-name>', // REQUIRED -- set this to your s3 bucket name
     awsRegion: 'us-east-1', // OPTIONAL -- change this if your bucket is outside us-east-1
     /* END EDITS */
-    signerUrl: 'http://localhost:3000/signv4_auth',
-    awsSignatureVersion: '4',
+    // signerUrl: 'http://localhost:8080/sign_auth',
+    awsSignatureVersion: 'backend',
+    backendSignMethod: backendSign,
     computeContentMd5: true,
     cryptoMd5Method: function (data) { return AWS.util.crypto.md5(data, 'base64'); },
     cryptoHexEncodedHash256: function (data) { return AWS.util.crypto.sha256(data, 'hex'); }
+
   })
   .then(
     // Successfully created evaporate instance `_e_`
@@ -46,7 +65,7 @@
           var promise = _e_.add({
             name: 'test_' + Math.floor(1000000000*Math.random()),
             file: files[i],
-            downloadName: 'test.png"',
+            downloadName: 'test.png',
             contentType: 'image/png',
             metadata: {
               'my-meta': 'dddd'
