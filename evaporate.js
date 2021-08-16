@@ -82,6 +82,7 @@
       signHeaders: {},
       customAuthMethod: undefined,
       backendSignMethod: undefined,
+      backendGetSessionTokenMethod: undefined,
       maxFileSize: null,
       signResponseHandler: null,
       xhrWithCredentials: false,
@@ -1121,7 +1122,7 @@
     var self = this;
 
     var authorizationStringPromise;
-    if (self.awsSignatureVersion === 'backend') {
+    if (self.con.awsSignatureVersion === 'backend') {
       authorizationStringPromise = self.signer.authorizationString();
     } else {
       authorizationStringPromise = Promise.resolve(self.signer.authorizationString());
@@ -1207,10 +1208,27 @@
     this.request.x_amz_headers = extend(this.request.x_amz_headers, {
       'x-amz-date': this.request.dateString
     });
-    return this.signer.getPayload()
-        .then(function () {
-          return authorizationMethod(this).authorize();
-        }.bind(this));
+    var self = this;
+    var sessionTokenPromise;
+    if (this.con.awsSignatureVersion === 'backend' && this.con.backendGetSessionTokenMethod) {
+      sessionTokenPromise = this.con.backendGetSessionTokenMethod();
+    } else {
+      sessionTokenPromise = Promise.resolve(null);
+    }
+    return sessionTokenPromise.then(function (token) {
+      if (token) {
+        self.request.x_amz_headers = extend(self.request.x_amz_headers, {
+          'x-amz-security-token': token,
+        });
+      }
+      return self.signer.getPayload();
+    }).then(function () {
+      return authorizationMethod(self).authorize();
+    }).catch(function (reason) {
+      self.fileUpload.deferredCompletion.reject(reason);
+      throw reason;
+    });
+    
   };
   SignedS3AWSRequest.prototype.authorizationSuccess = function (authorization) {
     l.d(this.request.step, 'signature:', authorization);
@@ -1903,7 +1921,6 @@
         request = awsRequest.request;
 
     function AuthorizationMethod() {
-      console.log('AuthorizationMethod.this', this);
       this.request = request;
     }
     AuthorizationMethod.prototype = Object.create(AuthorizationMethod.prototype);

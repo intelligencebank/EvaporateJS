@@ -38,6 +38,20 @@
     }
   }
 
+  const getSessionToken = async () => {
+    const resp = await fetch(
+      'http://localhost:8080/session_token',
+      {
+        method: 'GET'
+      }
+    );
+    if (resp.status === 200) {
+      return await resp.text();
+    } else {
+      throw 'Invalid session token response';
+    }
+  }
+
   Evaporate.create({
     /* START EDITS */
     aws_key: '<aws_key>', // REQUIRED -- set this to your AWS_ACCESS_KEY_ID
@@ -47,6 +61,7 @@
     // signerUrl: 'http://localhost:8080/sign_auth',
     awsSignatureVersion: 'backend',
     backendSignMethod: backendSign,
+    backendGetSessionTokenMethod: getSessionToken,
     computeContentMd5: true,
     cryptoMd5Method: function (data) { return AWS.util.crypto.md5(data, 'base64'); },
     cryptoHexEncodedHash256: function (data) { return AWS.util.crypto.sha256(data, 'hex'); }

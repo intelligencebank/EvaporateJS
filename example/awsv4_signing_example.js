@@ -117,6 +117,14 @@ app.use('/backend_sign', function (req, res) {
   res.send(authString);
 });
 
+app.get('/session_token', function (req, res) {
+  if (process.env.AWS_SESSION_TOKEN) {
+    res.send(process.env.AWS_SESSION_TOKEN);
+  } else {
+    res.send();
+  }
+});
+
 app.get('/index.html', function (req, res) {
 	res.redirect(301, '/example/evaporate_example_awsv4_signature.html');
 });
